@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<title>BeatStudio Pro 3D</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+body{margin:0; overflow:hidden; font-family:Arial; background:#111; color:white;}
+.ui{position:absolute; top:20px; left:20px; padding:15px; background:rgba(0,0,0,0.75); border-radius:12px; width:350px; max-height:90vh; overflow-y:auto;}
+input, select, button{width:100%; margin-top:8px; padding:8px; border-radius:8px; border:none;}
+button{background:linear-gradient(45deg,#00d4ff,#b300ff); color:white; font-weight:bold; cursor:pointer;}
+button:hover{opacity:0.85;}
+.catalogo{margin-top:15px;}
+.musica-item{padding:10px; margin-bottom:10px; background:rgba(255,255,255,0.05); border-radius:8px;}
+.ficha{font-size:13px; margin-top:5px;}
+.cart{margin-top:15px; padding:10px; background:rgba(0,0,0,0.6); border-radius:10px;}
+.total{font-weight:bold; margin-top:8px;}
+#logo{position:absolute; top:10px; right:20px; font-size:24px; font-weight:bold; animation:logoAnim 3s infinite alternate;}
+@keyframes logoAnim{0%{color:#00d4ff;}50%{color:#ff00ff;}100%{color:#00d4ff;}}
+</style>
+</head>
+<body>
+
+<div class="ui">
+<h3>🎵 BeatStudio Pro 3D</h3>
+
+<input type="file" id="fileInput" accept="audio/mp3,audio/*">
+<input type="text" id="titulo" placeholder="Título">
+<input type="text" id="autor" placeholder="Autor">
+<input type="text" id="genero" placeholder="Género">
+<input type="text" id="software" placeholder="Software (FL Studio)">
+<input type="number" id="bpm" placeholder="BPM">
+<input type="date" id="data">
+<input type="number" id="preco" placeholder="Preço €">
+
+<select id="tema">
+<option value="neon">Neon</option>
+<option value="fogo">Fogo</option>
+<option value="ouro">Ouro</option>
+</select>
+
+<button id="adicionar">➕ Adicionar Música</button>
+<button onclick="pauseMusic()">⏸ Pausar</button>
+<button onclick="resumeMusic()">▶ Continuar</button>
+
+<div class="catalogo" id="catalogo"></div>
+
+<div class="cart">
+<h4>🛒 Carrinho</h4>
+<div id="cartItems"></div>
+<div class="total">Total: €<span id="total">0</span></div>
+<button onclick="checkout()">Finalizar Compra</button>
+</div>
+
+</div>
+
+<div id="logo">BeatStudio</div>
+
+<script>
+let catalogo=[];
+let cart=[];
+let total=0;
+let audioAtual=null;
+let audioCtx=null;
+let analyser=null;
+let dataArray=null;
+
+let temas={
+neon:0x00d4ff,
+fogo:0xff3300,
+ouro:0xffcc00
+};
+
+// THREE.JS
+let scene=new THREE.Scene();
+let camera=new THREE.PerspectiveCamera(75,window.innerWidth/window.innerHeight,0.1,1000);
+let renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth,window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+let light=new THREE.PointLight(0x00d4ff,2,50);
+light.position.set(0,5,10);
+scene.add(light);
+
+// 🎵 Notas Musicais 3D
+let notas = [];
+
+function criarNota(){
+    
+    let shape = new THREE.Shape();
+
+    // formato simples de nota musical
+    shape.moveTo(0,0);
+    shape.lineTo(0,4);
+    shape.absarc(0,0,1,0,Math.PI*2,false);
+
+    let extrude = new THREE.ExtrudeGeometry(shape,{
+        depth:0.5,
+        bevelEnabled:false
+    });
+
+    let material = new THREE.MeshStandardMaterial({
+        color:0x00d4ff,
+        emissive:0x222222,
+        metalness:0.6,
+        roughness:0.3
+    });
+
+    let nota = new THREE.Mesh(extrude,material);
+
+    nota.position.x = (Math.random()-0.5)*30;
+    nota.position.y = (Math.random()-0.5)*20;
+    nota.position.z = (Math.random()-0.5)*30;
+
+    nota.scale.set(0.8,0.8,0.8);
+
+    scene.add(nota);
+    notas.push(nota);
+}
+
+// criar várias notas
+for(let i=0;i<20;i++){
+    criarNota();
+}
+
+const partGeo=new THREE.BufferGeometry();
+const partCount=1000;
+let pos=new Float32Array(partCount*3);
+for(let i=0;i<partCount*3;i++){pos[i]=(Math.random()-0.5)*80;}
+partGeo.setAttribute("position",new THREE.BufferAttribute(pos,3));
+const partMat=new THREE.PointsMaterial({size:0.15,color:0xffffff});
+const particles=new THREE.Points(partGeo,partMat);
+scene.add(particles);
+
+camera.position.z=35;
+
+// 🌊 CHÃO COM ONDAS SONORAS
+let floorGeometry = new THREE.PlaneGeometry(60,60,100,100);
+let floorMaterial = new THREE.MeshStandardMaterial({
+    color:0x00d4ff,
+    wireframe:true,
+    emissive:0x111111
+});
+
+let floor = new THREE.Mesh(floorGeometry,floorMaterial);
+floor.rotation.x = -Math.PI/2;
+floor.position.y = -15;
+
+scene.add(floor);
+
+// guardar posição original dos vértices
+let originalPositions = floorGeometry.attributes.position.array.slice();
+
+// Adicionar música
+document.getElementById("adicionar").onclick=()=>{
+let file=document.getElementById("fileInput").files[0];
+if(!file){alert("Carrega uma música!");return;}
+
+let mp3=new Audio(URL.createObjectURL(file));
+
+let musica={
+audio:mp3,
+titulo:document.getElementById("titulo").value||file.name,
+autor:document.getElementById("autor").value||"",
+genero:document.getElementById("genero").value||"",
+software:document.getElementById("software").value||"",
+bpm:document.getElementById("bpm").value||"",
+data:document.getElementById("data").value||"",
+preco:Number(document.getElementById("preco").value||0),
+tema:document.getElementById("tema").value,
+url:mp3.src
+};
+
+catalogo.push(musica);
+
+let item=document.createElement("div");
+item.className="musica-item";
+item.innerHTML=`
+<b>${musica.titulo}</b> - €${musica.preco}
+<button>🎧 Ouvir</button>
+<button>➕ Carrinho</button>
+<button>⬇ Download</button>
+<div class="ficha">
+Autor: ${musica.autor}<br>
+Género: ${musica.genero}<br>
+Software: ${musica.software}<br>
+BPM: ${musica.bpm}<br>
+Data: ${musica.data}
+</div>
+`;
+
+let btnOuvir=item.querySelectorAll("button")[0];
+let btnCarrinho=item.querySelectorAll("button")[1];
+let btnDownload=item.querySelectorAll("button")[2];
+
+btnOuvir.onclick=()=>{
+
+if(audioAtual && audioAtual !== musica.audio){
+audioAtual.pause();
+}
+
+audioAtual = musica.audio;
+audioAtual.play();
+
+if(!audioCtx){
+audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+}
+
+if(!analyser){
+analyser = audioCtx.createAnalyser();
+analyser.fftSize = 2048;
+dataArray = new Uint8Array(analyser.frequencyBinCount);
+}
+
+let src = audioCtx.createMediaElementSource(audioAtual);
+src.connect(analyser);
+analyser.connect(audioCtx.destination);
+
+notas.forEach(n=>n.material.color.setHex(temas[musica.tema]));
+light.color.setHex(temas[musica.tema]);
+floorMaterial.color.setHex(temas[musica.tema]);
+
+};
+
+btnCarrinho.onclick=()=>{
+cart.push(musica);
+total+=musica.preco;
+updateCart();
+};
+
+btnDownload.onclick=()=>{
+let a=document.createElement("a");
+a.href=musica.url;
+a.download=musica.titulo+".mp3";
+a.click();
+};
+
+document.getElementById("catalogo").appendChild(item);
+};
+
+// Atualizar carrinho
+function updateCart(){
+let cartDiv=document.getElementById("cartItems");
+cartDiv.innerHTML="";
+cart.forEach(m=>{
+cartDiv.innerHTML+=`<div>${m.titulo} - €${m.preco}</div>`;
+});
+document.getElementById("total").innerText=total;
+}
+
+function checkout(){
+if(cart.length===0){alert("Carrinho vazio!");return;}
+alert("Compra simulada concluída!");
+cart=[];
+total=0;
+updateCart();
+}
+
+function pauseMusic(){
+if(audioAtual){
+audioAtual.pause();
+}
+}
+
+function resumeMusic(){
+if(audioAtual){
+audioAtual.play();
+}
+}
+
+// Animação
+function animate(){
+requestAnimationFrame(animate);
+
+if(analyser){
+analyser.getByteFrequencyData(dataArray);
+
+let bass = dataArray[5]/255;
+let mid = dataArray[100]/255;
+let treble = dataArray[200]/255;
+
+notas.forEach((nota,i)=>{
+
+nota.rotation.y += 0.01 + treble*0.05;
+nota.rotation.x += 0.005;
+
+nota.position.y += 0.02 + mid*0.2;
+
+nota.scale.set(
+1 + bass*2,
+1 + bass*2,
+1 + bass*2
+);
+
+// 🌊 Atualizar ondas no chão
+let positions = floorGeometry.attributes.position.array;
+
+for(let i=0; i<positions.length; i+=3){
+
+let x = positions[i];
+let z = positions[i+2];
+
+let distance = Math.sqrt(x*x + z*z);
+
+positions[i+1] =
+Math.sin(distance*0.5 + performance.now()*0.005)
+* bass * 6;
+
+}
+
+floorGeometry.attributes.position.needsUpdate = true;
+
+// resetar posição quando sobe demais
+if(nota.position.y > 20){
+nota.position.y = -20;
+}
+
+});
+
+particles.rotation.y += 0.002 + treble*0.01;
+}
+
+renderer.render(scene,camera);
+}
+animate();
+</script>
+
+</body>
+</html>
